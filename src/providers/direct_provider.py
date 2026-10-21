@@ -3,6 +3,7 @@ import json
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
+import urllib.parse
 import urllib.request
 import apt
 import apt_pkg
@@ -17,7 +18,7 @@ CUSTOM_SOURCES_PATH = os.path.expanduser(
     "~/.config/atualizador-apps/custom_sources.json"
 )
 
-# Catálogo nativo de fontes oficiais diretas para apps instalados via .deb avulso
+# Catálogo nativo base de fontes oficiais diretas para apps instalados via .deb avulso
 BUILTIN_DIRECT_SOURCES: Dict[str, Dict[str, Any]] = {
     "discord": {
         "type": "redirect_deb",
@@ -32,7 +33,7 @@ BUILTIN_DIRECT_SOURCES: Dict[str, Dict[str, Any]] = {
         "source_name": "GitHub Oficial (dbeaver/dbeaver)",
         "source_host": "github.com/dbeaver/dbeaver",
         "repo": "dbeaver/dbeaver",
-        "asset_pattern": r"dbeaver-ce-.*-linux-x86_64\.deb$",
+        "asset_pattern": r"dbeaver-ce-.*-linux-x86_64\.deb$|dbeaver-ce_.*_amd64\.deb$",
         "fallback_deb_url": "https://dbeaver.io/files/dbeaver-ce_latest_amd64.deb",
         "homepage": "https://dbeaver.io",
     },
@@ -58,7 +59,7 @@ BUILTIN_DIRECT_SOURCES: Dict[str, Dict[str, Any]] = {
 class DirectProvider:
     """
     Verifica atualizações buscando diretamente nas fontes oficiais na web (GitHub Releases,
-    APIs oficiais de download) para pacotes .deb instalados manualmente.
+    APIs oficiais de download e índices de repositórios diretos) para pacotes .deb instalados manualmente.
     """
 
     def __init__(self, resolver: DesktopResolver) -> None:
@@ -76,9 +77,10 @@ class DirectProvider:
                 pass
         return sources
 
-    def save_custom_github_source(
-        self, pkg_name: str, github_repo: str, asset_pattern: str = r".*amd64\.deb$|.*x86_64\.deb$"
+    def save_discovered_source(
+        self, pkg_name: str, source_config: Dict[str, Any]
     ) -> None:
+        """Persiste uma configuração de fonte direta descoberta pelo SourceFinder."""
         os.makedirs(os.path.dirname(CUSTOM_SOURCES_PATH), exist_ok=True)
         custom: Dict[str, Any] = {}
         if os.path.exists(CUSTOM_SOURCES_PATH):
@@ -87,16 +89,47 @@ class DirectProvider:
                     custom = json.load(f)
             except Exception:
                 custom = {}
-        custom[pkg_name.strip()] = {
-            "type": "github_release",
-            "source_name": f"GitHub Oficial ({github_repo.strip()})",
-            "source_host": f"github.com/{github_repo.strip()}",
-            "repo": github_repo.strip(),
-            "asset_pattern": asset_pattern,
-            "homepage": f"https://github.com/{github_repo.strip()}/releases",
-        }
+        custom[pkg_name.strip()] = source_config
         with open(CUSTOM_SOURCES_PATH, "w", encoding="utf-8") as f:
             json.dump(custom, f, indent=2, ensure_ascii=False)
+
+    def save_custom_github_source(
+        self,
+        pkg_name: str,
+        github_repo: str,
+        asset_pattern: str = r".*amd64\.deb$|.*x86_64\.deb$|.*_all\.deb$",
+    ) -> None:
+        clean_repo = github_repo.strip()
+        if "github.com/" in clean_repo:
+            clean_repo = clean_repo.split("github.com/", 1)[1].strip("/")
+            parts = clean_repo.split("/")
+            if len(parts) >= 2:
+                clean_repo = f"{parts[0]}/{parts[1]}"
+
+        cfg = {
+            "type": "github_release",
+            "source_name": f"GitHub Oficial ({clean_repo})",
+            "source_host": f"github.com/{clean_repo}",
+            "repo": clean_repo,
+            "asset_pattern": asset_pattern,
+            "homepage": f"https://github.com/{clean_repo}/releases",
+        }
+        self.save_discovered_source(pkg_name, cfg)
+
+    def remove_custom_source(self, pkg_name: str) -> bool:
+        if not os.path.exists(CUSTOM_SOURCES_PATH):
+            return False
+        try:
+            with open(CUSTOM_SOURCES_PATH, "r", encoding="utf-8") as f:
+                custom = json.load(f)
+            if pkg_name in custom:
+                del custom[pkg_name]
+                with open(CUSTOM_SOURCES_PATH, "w", encoding="utf-8") as f:
+                    json.dump(custom, f, indent=2, ensure_ascii=False)
+                return True
+        except Exception:
+            pass
+        return False
 
     def scan(self) -> Tuple[List[UpdateItem], List[UpdateItem]]:
         cache = apt.Cache()
@@ -150,6 +183,8 @@ class DirectProvider:
             new_ver, dl_url, dl_size = self._check_github(cfg)
         elif stype == "docker_desktop":
             new_ver, dl_url, dl_size = self._check_docker_desktop(cfg)
+        elif stype == "apt_repo_deb":
+            new_ver, dl_url, dl_size = self._check_apt_repo_deb(cfg)
 
         if not new_ver:
             return None
@@ -246,3 +281,48 @@ class DirectProvider:
         except Exception:
             pass
         return ver, deb_url, size
+
+    @staticmethod
+    def _check_apt_repo_deb(
+        cfg: Dict[str, Any],
+    ) -> Tuple[Optional[str], Optional[str], int]:
+        req = urllib.request.Request(
+            cfg["packages_url"], headers={"User-Agent": USER_AGENT}
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+
+        target_pkg = cfg.get("target_pkg", "")
+        best_ver: Optional[str] = None
+        best_filename: Optional[str] = None
+        best_size: int = 0
+
+        for block in text.split("\n\n"):
+            if not block.strip():
+                continue
+            pkg_val = ""
+            ver_val = ""
+            file_val = ""
+            size_val = 0
+            for line in block.splitlines():
+                if line.startswith("Package:"):
+                    pkg_val = line.split(":", 1)[1].strip()
+                elif line.startswith("Version:"):
+                    ver_val = line.split(":", 1)[1].strip()
+                elif line.startswith("Filename:"):
+                    file_val = line.split(":", 1)[1].strip()
+                elif line.startswith("Size:"):
+                    try:
+                        size_val = int(line.split(":", 1)[1].strip())
+                    except ValueError:
+                        size_val = 0
+            if pkg_val == target_pkg and ver_val and file_val:
+                if best_ver is None or apt_pkg.version_compare(ver_val, best_ver) > 0:
+                    best_ver = ver_val
+                    best_filename = file_val
+                    best_size = size_val
+
+        if best_ver and best_filename:
+            dl_url = urllib.parse.urljoin(cfg["base_repo_url"], best_filename)
+            return best_ver, dl_url, best_size
+        return None, None, 0

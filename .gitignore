@@ -22,3 +22,7 @@ dist/
 # IDE / Editor folders
 .vscode/
 .idea/
+
+# Graphify
+graphify-out/
+

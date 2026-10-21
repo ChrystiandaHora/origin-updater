@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <!-- Sombra base estilo GNOME Libadwaita -->
+    <linearGradient id="bgShadow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="10%" stop-color="#1e293b"/>
+      <stop offset="90%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+
+    <!-- Gradiente principal do card (Azul Cobalto -> Índigo -> Roxo) -->
+    <linearGradient id="bgMain" x1="15%" y1="5%" x2="85%" y2="95%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="52%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+
+    <!-- Brilho superior interno -->
+    <linearGradient id="innerGlow" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.0"/>
+    </linearGradient>
+
+    <!-- Gradiente da Seta de Atualização (Verde Esmeralda / Ciano) -->
+    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+
+    <!-- Face iluminada do cubo de pacote -->
+    <linearGradient id="cubeTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e0e7ff"/>
+    </linearGradient>
+    <linearGradient id="cubeLeft" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#c7d2fe"/>
+      <stop offset="100%" stop-color="#93c5fd"/>
+    </linearGradient>
+    <linearGradient id="cubeRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818cf8"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Base 3D inferior do Squircle -->
+  <rect x="12" y="16" width="104" height="100" rx="24" fill="url(#bgShadow)"/>
+
+  <!-- Corpo Principal do Squircle -->
+  <rect x="12" y="12" width="104" height="100" rx="24" fill="url(#bgMain)"/>
+  <rect x="13" y="13" width="102" height="98" rx="23" fill="none" stroke="url(#innerGlow)" stroke-width="2"/>
+
+  <!-- Anel de Sincronização de Fontes Originais -->
+  <circle cx="64" cy="62" r="37" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="4" stroke-dasharray="16 8"/>
+  <path d="M 32 45 A 37 37 0 0 1 95 43" fill="none" stroke="#38bdf8" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="95" cy="43" r="4" fill="#38bdf8"/>
+
+  <!-- Cubo Isométrico (Pacote / Aplicativo) -->
+  <!-- Face Superior -->
+  <polygon points="64,36 90,50 64,64 38,50" fill="url(#cubeTop)"/>
+  <!-- Face Esquerda -->
+  <polygon points="38,50 64,64 64,93 38,79" fill="url(#cubeLeft)"/>
+  <!-- Face Direita -->
+  <polygon points="64,64 90,50 90,79 64,93" fill="url(#cubeRight)"/>
+
+  <!-- Badge / Seta de Download & Upgrade Oficial -->
+  <circle cx="88" cy="84" r="20" fill="#0f172a" fill-opacity="0.35"/>
+  <circle cx="88" cy="82" r="19" fill="url(#arrowGrad)" stroke="#ffffff" stroke-width="2.5"/>
+  <path d="M 88 71 L 97 81 L 92 81 L 92 91 L 84 91 L 84 81 L 79 81 Z" fill="#ffffff"/>
+</svg>
+

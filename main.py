@@ -4,7 +4,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio
+from gi.repository import Adw, Gio, Gtk
 
 from src.ui.window import UpdaterWindow
 
@@ -17,6 +17,7 @@ class UpdaterApplication(Adw.Application):
             application_id="br.com.chrystian.AtualizadorApps",
             flags=Gio.ApplicationFlags.FLAGS_NONE,
         )
+        Gtk.Window.set_default_icon_name("br.com.chrystian.AtualizadorApps")
         # Preferência por esquema de cores escuro/adaptativo moderno
         style_mgr = Adw.StyleManager.get_default()
         style_mgr.set_color_scheme(Adw.ColorScheme.PREFER_DARK)

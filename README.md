@@ -1,13 +1,14 @@
-# 🚀 Origin Updater (`origin-updater`)
+# <img src="assets/origin-updater.svg" width="38" valign="middle" alt="Origin Updater Logo" /> Origin Updater (`origin-updater`)
 
-**Central de Atualizações Nativa para Linux (GTK4 / Libadwaita)** que verifica, baixa e instala atualizações de aplicativos e pacotes diretamente das suas **fontes originais oficiais**.
+**Central de Atualizações Nativa para Linux (GTK4 / Libadwaita)** que verifica, descobre, baixa e instala atualizações de aplicativos e pacotes diretamente das suas **fontes originais oficiais**.
 
 ---
 
 ## ✨ Principais Funcionalidades
 
-1. **Verificação em 3 Camadas de Fontes Originais**:
-   - **Fontes Oficiais Diretas (`.deb` avulsos)**: consulta diretamente APIs oficiais e GitHub Releases para aplicativos instalados manualmente sem repositório APT (ex: **Discord**, **DBeaver Community**, **RustDesk**, **Docker Desktop**), além de permitir cadastrar novos repositórios do GitHub pela interface.
+1. **Verificação em 3 Camadas de Fontes Originais + Descoberta Automática**:
+   - **Varredura de Aplicativos & Descoberta Automática de Fontes**: escaneia a máquina Linux em busca de pacotes `.deb` instalados manualmente (órfãos de repositório APT), entradas `.desktop`, diretórios `/opt` e arquivos `.AppImage`, localizando automaticamente suas fontes oficiais de atualização via `Homepage` do `dpkg`, GitHub Releases API, índices de repositórios oficiais e catálogo expandido.
+   - **Fontes Oficiais Diretas (`.deb` avulsos)**: consulta diretamente APIs oficiais, GitHub Releases e repositórios diretos para aplicativos instalados manualmente (ex: **Discord**, **DBeaver Community**, **RustDesk**, **Docker Desktop**, **FortiClient VPN**, **Obsidian**, **LocalSend**, **Insomnia**, etc.).
    - **Repositórios APT Oficiais & de Fabricantes**: identifica a origem exata de cada pacote (`dl.google.com`, `packages.microsoft.com`, `download.docker.com`, `repository.spotify.com`, `deb.anydesk.com`, `security.debian.org`, `deb.debian.org`).
    - **Flatpak / Flathub Oficial**: verifica atualizações de aplicativos e runtimes instalados via Flatpak diretamente no Flathub (`dl.flathub.org`).
 
@@ -60,17 +61,30 @@ python3 main.py
 ```text
 origin-updater/
 ├── main.py                      # Ponto de entrada GTK4 / Libadwaita
-├── install.sh                   # Script de instalação do atalho .desktop e comando CLI
+├── install.sh                   # Script de instalação do atalho .desktop, ícone e comando CLI
+├── LICENSE                      # Licença MIT
 ├── README.md                    # Documentação do projeto
+├── assets/
+│   ├── origin-updater.svg       # Ícone vetorial oficial (GNOME / Libadwaita HIG)
+│   └── origin-updater.png       # Ícone rasterizado 256x256
 └── src/
     ├── models.py                # Modelos de dados (UpdateItem)
     ├── desktop_resolver.py      # Resolução de ícones e nomes amigáveis (.desktop)
-    ├── updater_engine.py        # Orquestrador de verificação e execução
+    ├── updater_engine.py        # Orquestrador de verificação, descoberta e execução
     ├── privileged_worker.py     # Worker root (pkexec + PTY) com streaming em tempo real
+    ├── discovery/
+    │   ├── app_scanner.py       # Varredura de pacotes .deb órfãos, .desktop, /opt e AppImage
+    │   └── source_finder.py     # Motor de busca automática de fontes (Homepage, GitHub API, Flathub)
     ├── providers/
     │   ├── apt_provider.py      # Provedor de repositórios APT oficiais e de terceiros
     │   ├── flatpak_provider.py  # Provedor Flatpak / Flathub
     │   └── direct_provider.py   # Provedor de fontes diretas (GitHub Releases / APIs)
     └── ui/
-        └── window.py            # Janela principal e Tela Cheia de Log em Tempo Real
+        └── window.py            # Janela principal, Modal de Descoberta e Tela de Log em Tempo Real
 ```
+
+---
+
+## 📄 Licença
+
+Distribuído sob a licença **MIT**. Veja o arquivo [`LICENSE`](LICENSE) para mais detalhes.

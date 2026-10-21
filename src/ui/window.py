@@ -1,7 +1,8 @@
 from datetime import datetime
+import os
 import threading
 import webbrowser
-from typing import List
+from typing import Dict, List, Optional
 
 import gi
 
@@ -9,8 +10,16 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
+from ..discovery import DiscoveredApp, DiscoveredSource
 from ..models import UpdateItem, format_size
+from ..providers.direct_provider import BUILTIN_DIRECT_SOURCES
 from ..updater_engine import UpdaterEngine
+
+ASSETS_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "assets")
+)
+APP_ICON_SVG = os.path.join(ASSETS_DIR, "origin-updater.svg")
+
 
 
 APP_CSS = """
@@ -80,6 +89,16 @@ APP_CSS = """
     background-color: alpha(#77767b, 0.22);
     color: #deddda;
     border: 1px solid alpha(#deddda, 0.3);
+}
+.badge-found {
+    background-color: alpha(#2ec27e, 0.25);
+    color: #8ff0a4;
+    border: 1px solid alpha(#8ff0a4, 0.5);
+}
+.badge-hint {
+    background-color: alpha(#e5a50a, 0.25);
+    color: #f9f06b;
+    border: 1px solid alpha(#f9f06b, 0.45);
 }
 .version-pill {
     background-color: alpha(@accent_bg_color, 0.16);
@@ -168,6 +187,10 @@ class UpdaterWindow(Adw.ApplicationWindow):
             Gtk.StyleContext.add_provider_for_display(
                 display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
+            if os.path.isdir(ASSETS_DIR):
+                theme = Gtk.IconTheme.get_for_display(display)
+                theme.add_search_path(ASSETS_DIR)
+                self.set_icon_name("br.com.chrystian.AtualizadorApps")
 
     def _build_ui(self) -> None:
         root_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -175,6 +198,13 @@ class UpdaterWindow(Adw.ApplicationWindow):
 
         # ─── 1. HeaderBar ────────────────────────────────────────────────────
         header = Adw.HeaderBar()
+        title_outer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        title_outer.set_valign(Gtk.Align.CENTER)
+        if os.path.exists(APP_ICON_SVG):
+            logo_img = Gtk.Image.new_from_file(APP_ICON_SVG)
+            logo_img.set_pixel_size(28)
+            title_outer.append(logo_img)
+
         title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         title_lbl = Gtk.Label(label="Central de Atualizações")
         title_lbl.add_css_class("title")
@@ -184,7 +214,8 @@ class UpdaterWindow(Adw.ApplicationWindow):
         subtitle_lbl.add_css_class("subtitle")
         title_box.append(title_lbl)
         title_box.append(subtitle_lbl)
-        header.set_title_widget(title_box)
+        title_outer.append(title_box)
+        header.set_title_widget(title_outer)
 
         # Botão Verificar Agora
         self.btn_scan = Gtk.Button()
@@ -226,16 +257,16 @@ class UpdaterWindow(Adw.ApplicationWindow):
         self.btn_switch_screen.connect("clicked", self._on_switch_screen_clicked)
         header.pack_end(self.btn_switch_screen)
 
-        # Botão + Fonte GitHub
+        # Botão Descobrir Apps & Fontes
         self.btn_add_source = Gtk.Button()
         add_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        add_box.append(Gtk.Image.new_from_icon_name("list-add-symbolic"))
-        add_box.append(Gtk.Label(label="Fonte GitHub"))
+        add_box.append(Gtk.Image.new_from_icon_name("system-search-symbolic"))
+        add_box.append(Gtk.Label(label="Descobrir Apps & Fontes"))
         self.btn_add_source.set_child(add_box)
         self.btn_add_source.set_tooltip_text(
-            "Cadastrar repositório GitHub oficial para um pacote .deb instalado manualmente"
+            "Varrer a máquina em busca de aplicativos instalados (.deb, /opt, AppImage) e encontrar automaticamente suas fontes oficiais de atualização"
         )
-        self.btn_add_source.connect("clicked", self._on_add_custom_source_clicked)
+        self.btn_add_source.connect("clicked", self._on_discover_sources_clicked)
         header.pack_end(self.btn_add_source)
 
         root_box.append(header)
@@ -941,12 +972,400 @@ class UpdaterWindow(Adw.ApplicationWindow):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    # ─── Diálogo para Adicionar Fonte GitHub Personalizada ───────────────────
+    # ─── Janela de Varredura de Aplicativos e Descoberta Automática de Fontes ───
 
-    def _on_add_custom_source_clicked(self, _btn: Gtk.Button) -> None:
-        dialog = Gtk.Window(
-            title="Adicionar Fonte Oficial do GitHub (.deb)",
+    def _on_discover_sources_clicked(self, _btn: Gtk.Button) -> None:
+        win = Gtk.Window(
+            title="Varredura de Aplicativos & Descoberta Automática de Fontes",
             transient_for=self,
+            modal=True,
+            default_width=940,
+            default_height=660,
+        )
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        win.set_child(root)
+
+        # Topo com instruções e botões de ação
+        top_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        top_card.add_css_class("log-header-card")
+        top_card.set_margin_start(16)
+        top_card.set_margin_end(16)
+        top_card.set_margin_top(14)
+        top_card.set_margin_bottom(10)
+
+        header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        spinner = Gtk.Spinner()
+        header_row.append(spinner)
+
+        lbl_status = Gtk.Label(
+            label="Iniciando varredura dos aplicativos instalados na máquina..."
+        )
+        lbl_status.add_css_class("log-status-title")
+        lbl_status.set_halign(Gtk.Align.START)
+        lbl_status.set_hexpand(True)
+        lbl_status.set_ellipsize(Pango.EllipsizeMode.END)
+        header_row.append(lbl_status)
+
+        btn_manual = Gtk.Button()
+        man_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        man_box.append(Gtk.Image.new_from_icon_name("list-add-symbolic"))
+        man_box.append(Gtk.Label(label="Fonte GitHub Manual"))
+        btn_manual.set_child(man_box)
+        btn_manual.connect(
+            "clicked",
+            lambda *_: self._open_manual_github_dialog(
+                parent_win=win, on_saved=lambda: _run_discovery(force=False)
+            ),
+        )
+        header_row.append(btn_manual)
+
+        btn_rescan = Gtk.Button()
+        res_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        res_box.append(Gtk.Image.new_from_icon_name("view-refresh-symbolic"))
+        res_box.append(Gtk.Label(label="Re-escanear Fontes na Web"))
+        btn_rescan.set_child(res_box)
+        header_row.append(btn_rescan)
+
+        top_card.append(header_row)
+
+        prog_bar = Gtk.ProgressBar()
+        prog_bar.set_fraction(0.0)
+        top_card.append(prog_bar)
+
+        sub_lbl = Gtk.Label(
+            label=(
+                "O scanner analisa pacotes .deb instalados manualmente (sem repositório APT), diretórios /opt e AppImages,\n"
+                "buscando automaticamente a fonte oficial de atualização via Homepage do pacote, GitHub Releases API e Catálogo Oficial."
+            )
+        )
+        sub_lbl.add_css_class("app-summary")
+        sub_lbl.set_halign(Gtk.Align.START)
+        sub_lbl.set_wrap(True)
+        top_card.append(sub_lbl)
+
+        root.append(top_card)
+
+        # Lista de aplicativos descobertos
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_margin_start(16)
+        scroll.set_margin_end(16)
+        scroll.set_margin_bottom(10)
+
+        disc_list = Gtk.ListBox()
+        disc_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        disc_list.add_css_class("boxed-list")
+        scroll.set_child(disc_list)
+        root.append(scroll)
+
+        # Barra inferior do modal
+        bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bottom_bar.add_css_class("bottom-bar")
+
+        lbl_bottom = Gtk.Label(label="Varrendo sistema...")
+        lbl_bottom.set_halign(Gtk.Align.START)
+        lbl_bottom.set_hexpand(True)
+        bottom_bar.append(lbl_bottom)
+
+        btn_link_all = Gtk.Button(label="Vincular Todas as Fontes Encontradas")
+        btn_link_all.add_css_class("suggested-action")
+        btn_link_all.set_sensitive(False)
+        bottom_bar.append(btn_link_all)
+
+        btn_close = Gtk.Button(label="Concluir e Atualizar Lista")
+        btn_close.connect(
+            "clicked",
+            lambda *_: (win.destroy(), self.start_scan()),
+        )
+        bottom_bar.append(btn_close)
+
+        root.append(bottom_bar)
+
+        state: Dict[str, object] = {
+            "apps": [],
+            "sources": {},
+            "changes_made": False,
+        }
+
+        def _clear_disc_list() -> None:
+            while True:
+                r = disc_list.get_row_at_index(0)
+                if r is None:
+                    break
+                disc_list.remove(r)
+
+        def _render_results(
+            apps: List[DiscoveredApp],
+            sources: Dict[str, DiscoveredSource],
+        ) -> None:
+            _clear_disc_list()
+            installable_unlinked: List[DiscoveredSource] = []
+            configured_Now = self.engine.direct_provider.get_configured_sources()
+
+            for app in apps:
+                src = sources.get(app.pkg_name)
+                if (
+                    app.current_source_status == "untracked"
+                    and src
+                    and src.is_installable_direct_source
+                ):
+                    installable_unlinked.append(src)
+
+                row = Gtk.ListBoxRow()
+                hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+                hbox.add_css_class("app-row")
+
+                # Ícone
+                if app.icon_path:
+                    img = Gtk.Image.new_from_file(app.icon_path)
+                else:
+                    img = Gtk.Image.new_from_icon_name(
+                        app.icon_name or "application-x-executable"
+                    )
+                img.set_pixel_size(34)
+                img.set_valign(Gtk.Align.CENTER)
+                hbox.append(img)
+
+                # Coluna central de informações
+                info_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                info_col.set_hexpand(True)
+                info_col.set_valign(Gtk.Align.CENTER)
+
+                line1 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                title_lbl = Gtk.Label(label=app.display_name)
+                title_lbl.add_css_class("app-title")
+                line1.append(title_lbl)
+
+                pkg_lbl = Gtk.Label(
+                    label=f"({app.pkg_name} • v{app.installed_version})"
+                )
+                pkg_lbl.add_css_class("pkg-tech-name")
+                line1.append(pkg_lbl)
+
+                kind_badge = Gtk.Label(label=app.install_kind_label)
+                kind_badge.add_css_class("badge")
+                if app.install_kind == "orphan_deb":
+                    kind_badge.add_css_class("badge-direct")
+                elif app.install_kind == "apt_repo":
+                    kind_badge.add_css_class("badge-app-repo")
+                else:
+                    kind_badge.add_css_class("badge-system")
+                line1.append(kind_badge)
+                info_col.append(line1)
+
+                # Linha 2: Status da fonte
+                if app.current_source_status == "tracked_direct":
+                    cfg_entry = configured_Now.get(app.pkg_name, {})
+                    method_note = cfg_entry.get("discovery_method", "")
+                    prefix = (
+                        "✔ Fonte Direta Auto-Descoberta: "
+                        if cfg_entry.get("auto_discovered")
+                        else "✔ Fonte Direta Ativa: "
+                    )
+                    detail_txt = (
+                        f"{prefix}{app.current_source_name} ({app.current_source_host})"
+                    )
+                    if method_note:
+                        detail_txt += f"  •  {method_note}"
+                elif app.current_source_status == "tracked_apt":
+                    detail_txt = f"✔ Monitorado via Repositório APT Oficial: {app.current_source_name} ({app.current_source_host})"
+                elif src and src.is_installable_direct_source:
+                    ver_part = (
+                        f" • Última versão remota: v{src.latest_version}"
+                        if src.latest_version
+                        else ""
+                    )
+                    detail_txt = (
+                        f"🟢 Fonte Encontrada ({src.confidence_label}): {src.source_name}{ver_part}\n"
+                        f"Método: {src.discovery_method}"
+                    )
+                elif src and src.found:
+                    ver_part = (
+                        f" (v{src.latest_version})" if src.latest_version else ""
+                    )
+                    detail_txt = (
+                        f"🟡 {src.source_name}{ver_part} — {src.discovery_method}"
+                    )
+                else:
+                    hp_note = (
+                        f" • Homepage local: {app.homepage}"
+                        if app.homepage
+                        else ""
+                    )
+                    detail_txt = f"⚪ Sem release .deb direta localizada automaticamente{hp_note}"
+
+                desc_lbl = Gtk.Label(label=detail_txt)
+                desc_lbl.add_css_class("app-summary")
+                desc_lbl.set_halign(Gtk.Align.START)
+                desc_lbl.set_wrap(True)
+                info_col.append(desc_lbl)
+
+                hbox.append(info_col)
+
+                # Coluna direita de botões de ação
+                act_col = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+                act_col.set_valign(Gtk.Align.CENTER)
+
+                if (
+                    app.current_source_status == "untracked"
+                    and src
+                    and src.is_installable_direct_source
+                ):
+                    btn_link = Gtk.Button(label="Vincular Fonte")
+                    btn_link.add_css_class("suggested-action")
+
+                    def _on_link_one(
+                        _b: Gtk.Button, p_name: str = app.pkg_name, s: DiscoveredSource = src
+                    ) -> None:
+                        cfg = dict(s.config)
+                        cfg["auto_discovered"] = True
+                        cfg["discovery_method"] = s.discovery_method
+                        self.engine.direct_provider.save_discovered_source(
+                            p_name, cfg
+                        )
+                        state["changes_made"] = True
+                        _run_discovery(force=False)
+
+                    btn_link.connect("clicked", _on_link_one)
+                    act_col.append(btn_link)
+
+                elif (
+                    app.current_source_status == "tracked_direct"
+                    and app.pkg_name not in BUILTIN_DIRECT_SOURCES
+                ):
+                    btn_unlink = Gtk.Button(label="Desvincular")
+
+                    def _on_unlink_one(
+                        _b: Gtk.Button, p_name: str = app.pkg_name
+                    ) -> None:
+                        self.engine.direct_provider.remove_custom_source(p_name)
+                        state["changes_made"] = True
+                        _run_discovery(force=False)
+
+                    btn_unlink.connect("clicked", _on_unlink_one)
+                    act_col.append(btn_unlink)
+
+                if app.install_kind in ("orphan_deb", "appimage", "opt_binary"):
+                    btn_cfg = Gtk.Button(label="Configurar GitHub")
+                    btn_cfg.set_tooltip_text(
+                        f"Informar ou alterar manualmente o repositório GitHub para {app.pkg_name}"
+                    )
+                    btn_cfg.connect(
+                        "clicked",
+                        lambda _b, p_name=app.pkg_name: self._open_manual_github_dialog(
+                            prefill_pkg=p_name,
+                            parent_win=win,
+                            on_saved=lambda: _run_discovery(force=False),
+                        ),
+                    )
+                    act_col.append(btn_cfg)
+
+                web_url = (
+                    (src.download_url if src and src.download_url else None)
+                    or app.homepage
+                )
+                if web_url and web_url.startswith("http"):
+                    btn_web = Gtk.Button.new_from_icon_name("globe-symbolic")
+                    btn_web.set_tooltip_text(f"Abrir no navegador: {web_url}")
+                    btn_web.connect(
+                        "clicked", lambda _b, u=web_url: webbrowser.open(u)
+                    )
+                    act_col.append(btn_web)
+
+                hbox.append(act_col)
+                row.set_child(hbox)
+                disc_list.append(row)
+
+            orphan_count = sum(
+                1 for a in apps if a.install_kind in ("orphan_deb", "appimage", "opt_binary")
+            )
+            tracked_direct_count = sum(
+                1 for a in apps if a.current_source_status == "tracked_direct"
+            )
+            lbl_bottom.set_label(
+                f"{len(apps)} aplicativos analisados ({orphan_count} pacotes .deb locais/autônomos • "
+                f"{tracked_direct_count} com fonte direta vinculada • "
+                f"{len(installable_unlinked)} novas fontes prontas para vincular)"
+            )
+            btn_link_all.set_sensitive(len(installable_unlinked) > 0)
+            btn_link_all.set_label(
+                f"Vincular Todas as Fontes Encontradas ({len(installable_unlinked)})"
+            )
+
+        def _on_link_all(*_) -> None:
+            sources: Dict[str, DiscoveredSource] = state.get("sources", {})  # type: ignore
+            apps: List[DiscoveredApp] = state.get("apps", [])  # type: ignore
+            for app in apps:
+                src = sources.get(app.pkg_name)
+                if (
+                    app.current_source_status == "untracked"
+                    and src
+                    and src.is_installable_direct_source
+                ):
+                    cfg = dict(src.config)
+                    cfg["auto_discovered"] = True
+                    cfg["discovery_method"] = src.discovery_method
+                    self.engine.direct_provider.save_discovered_source(
+                        app.pkg_name, cfg
+                    )
+            state["changes_made"] = True
+            _run_discovery(force=False)
+
+        btn_link_all.connect("clicked", _on_link_all)
+
+        def _run_discovery(force: bool = False) -> None:
+            spinner.start()
+            btn_rescan.set_sensitive(False)
+            prog_bar.set_fraction(0.05)
+            lbl_status.set_label(
+                "Varrendo aplicativos instalados e pesquisando fontes oficiais..."
+            )
+
+            def _status_cb(msg: str, frac: float) -> None:
+                def _ui() -> bool:
+                    lbl_status.set_label(msg)
+                    prog_bar.set_fraction(max(0.0, min(1.0, frac)))
+                    return False
+
+                GLib.idle_add(_ui)
+
+            def _worker() -> None:
+                apps, sources = self.engine.discover_apps_and_sources(
+                    status_cb=_status_cb,
+                    force_refresh=force,
+                    auto_link_high_confidence=False,
+                )
+
+                def _finish() -> bool:
+                    spinner.stop()
+                    btn_rescan.set_sensitive(True)
+                    prog_bar.set_fraction(1.0)
+                    state["apps"] = apps
+                    state["sources"] = sources
+                    lbl_status.set_label(
+                        f"✔ Varredura concluída: {len(apps)} aplicativos encontrados na máquina."
+                    )
+                    _render_results(apps, sources)
+                    return False
+
+                GLib.idle_add(_finish)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        btn_rescan.connect("clicked", lambda *_: _run_discovery(force=True))
+        win.present()
+        _run_discovery(force=False)
+
+    def _open_manual_github_dialog(
+        self,
+        prefill_pkg: str = "",
+        parent_win: Optional[Gtk.Window] = None,
+        on_saved: Optional[ object ] = None,
+    ) -> None:
+        dialog = Gtk.Window(
+            title="Configurar Fonte Oficial do GitHub (.deb)",
+            transient_for=parent_win or self,
             modal=True,
             default_width=460,
         )
@@ -958,9 +1377,8 @@ class UpdaterWindow(Adw.ApplicationWindow):
 
         info = Gtk.Label(
             label=(
-                "Se você instalou algum programa via arquivo .deb manualmente,\n"
-                "informe o nome do pacote instalado e o repositório oficial no GitHub\n"
-                "para que o aplicativo busque novas releases automaticamente."
+                "Informe o nome do pacote instalado e o repositório oficial no GitHub\n"
+                "para que o aplicativo verifique e instale novas releases (.deb) automaticamente."
             )
         )
         info.set_wrap(True)
@@ -971,6 +1389,8 @@ class UpdaterWindow(Adw.ApplicationWindow):
         pkg_entry.set_placeholder_text(
             "Nome do pacote instalado (ex: obsidian, localsend)"
         )
+        if prefill_pkg:
+            pkg_entry.set_text(prefill_pkg)
         vbox.append(pkg_entry)
 
         repo_entry = Gtk.Entry()
@@ -986,7 +1406,7 @@ class UpdaterWindow(Adw.ApplicationWindow):
         btn_cancel.connect("clicked", lambda *_: dialog.destroy())
         btn_row.append(btn_cancel)
 
-        btn_save = Gtk.Button(label="Salvar e Verificar")
+        btn_save = Gtk.Button(label="Salvar Fonte")
         btn_save.add_css_class("suggested-action")
 
         def _on_save(*_) -> None:
@@ -995,7 +1415,10 @@ class UpdaterWindow(Adw.ApplicationWindow):
             if pkg and "/" in repo:
                 self.engine.direct_provider.save_custom_github_source(pkg, repo)
                 dialog.destroy()
-                self.start_scan()
+                if callable(on_saved):
+                    on_saved()
+                else:
+                    self.start_scan()
 
         btn_save.connect("clicked", _on_save)
         btn_row.append(btn_save)
